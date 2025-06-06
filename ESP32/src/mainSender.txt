@@ -1,0 +1,135 @@
+#include <SPI.h>
+#include <LoRa.h>
+#include <Adafruit_NeoPixel.h>
+
+#define LED_PIN 8
+#define NUMPIXELS 1
+
+#define LORA_SCK  4
+#define LORA_MISO 5
+#define LORA_MOSI 6
+#define LORA_CS   10
+#define LORA_RST  3
+#define LORA_DIO0 2
+
+Adafruit_NeoPixel pixel(NUMPIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
+
+void setColor(uint8_t r, uint8_t g, uint8_t b) {
+  pixel.setPixelColor(0, pixel.Color(r, g, b));
+  pixel.show();
+}
+
+void pulseColor(int duration_ms = 2000, char color = 'p') {
+  unsigned long start = millis();
+  uint8_t cr = 0, cg = 0, cb = 0;
+  switch (tolower(color)) {
+    case 'r': cr = 255; cg = 0;   cb = 0;   break; // red
+    case 'g': cr = 0;   cg = 255; cb = 0;   break; // green
+    case 'b': cr = 0;   cg = 0;   cb = 255; break; // blue
+    case 'y': cr = 255; cg = 255; cb = 0;   break; // yellow
+    case 'c': cr = 0;   cg = 255; cb = 255; break; // cyan
+    case 'm': cr = 255; cg = 0;   cb = 255; break; // magenta
+    case 'w': cr = 255; cg = 255; cb = 255; break; // white
+    case 'p': cr = 255; cg = 0;   cb = 128; break; // pink (default)
+    default:  cr = 255; cg = 0;   cb = 128; break; // fallback to pink
+  }
+  while (millis() - start < duration_ms) {
+    int brightness = abs((int)((millis() % 1000) - 500)) * 255 / 500;
+    setColor((cr * brightness) / 255, (cg * brightness) / 255, (cb * brightness) / 255);
+    delay(20);
+    if (Serial.available()) return;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pixel.begin();
+  pixel.setBrightness(10);
+  pixel.show();
+  setColor(0, 0, 0);
+
+  SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
+  LoRa.setPins(LORA_CS, LORA_RST, LORA_DIO0);
+
+  if (!LoRa.begin(433E6)) {
+    setColor(255, 0, 0);
+    Serial.println("LoRa init failed!");
+    while (true);
+  }
+
+  Serial.println("LoRa ready. Type your message below:");
+}
+
+void loop() {
+  if (!Serial.available()) {
+    pulseColor(100, 'p');
+    return;
+  }
+
+  String msg = Serial.readStringUntil('\n');
+  msg.trim(); // remove newline or spaces
+
+  if (msg.length() == 0) return; // ignore empty
+
+  bool ackReceived = false;
+
+  while (!ackReceived) {
+    Serial.print("📤 Sending: ");
+    Serial.println(msg);
+
+    setColor(0, 255, 0); // green = sending
+    LoRa.beginPacket();
+    LoRa.print(msg);
+    LoRa.endPacket();
+
+    setColor(255, 128, 0); // orange = waiting
+
+    unsigned long start = millis();
+
+    while (millis() - start < 3000) {
+      int packetSize = LoRa.parsePacket();
+      if (packetSize > 0 && LoRa.available()) {
+        String ack = LoRa.readString();
+        ack.trim();
+        String expectedAck = "ACK: " + msg;
+        if (ack == expectedAck) {
+          Serial.println("✅ ACK received\nShow message: y/n");
+            while (!Serial.available()) {
+              delay(10);
+            }
+          String yn = Serial.readStringUntil('\n');
+          yn.trim();
+
+          if (yn.equalsIgnoreCase("y")) {
+            pulseColor('g');
+            Serial.print("📨 Message: ");
+            Serial.println(ack);
+          } else {
+            Serial.println("📭 Message hidden.");
+            pulseColor('y');
+          }
+
+
+        } else {
+          Serial.print("⚠️  Unexpected ACK content: ");
+          pulseColor('r');
+          Serial.println(ack);
+        }
+
+        ackReceived = true;
+        break;
+      }
+    }
+
+    if (!ackReceived) {
+      setColor(255, 0, 0); // red
+      Serial.println("❌ No ACK, retrying in 1s...");
+      delay(1000);
+    } else {
+      setColor(0, 0, 255); // blue
+      delay(500);
+    }
+  }
+
+  Serial.println("\nType your next message:");
+}

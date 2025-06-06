@@ -1,0 +1,80 @@
+#include <Wire.h>
+#include <Adafruit_VL53L1X.h>
+#include <Adafruit_NeoPixel.h>
+
+#define LED_PIN    8
+#define LED_COUNT  1
+
+Adafruit_NeoPixel pixel(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
+Adafruit_VL53L1X vl53 = Adafruit_VL53L1X();
+
+void setColorByDistance(uint16_t distance);
+
+void setup() {
+    Serial.begin(115200);
+
+    // LED Setup
+    pixel.begin();
+    pixel.setBrightness(10);
+    pixel.show();
+
+    // I2C Init
+    Wire.begin(7, 6);  // SDA = GPIO7, SCL = GPIO6, General Purpose Input/Output pin (read inputs and send outputs)
+    //I2C: 1. Sda pin, 2. Scl pin: I2C ment for short distance (<=50cm). for longer distances Wire.setClock(100000) -> 100kHz standard- reduce to lower clockspeed 
+    /*
+        Scan network for i2c address i2c: Inter-Integrated Circuit (I²C)
+        #include <Wire.h>
+
+        void setup() {
+            Wire.begin(8, 9);  // Example GPIOs
+            Serial.begin(115200);
+            delay(1000);
+        
+            Serial.println("Scanning I2C...");
+            for (uint8_t address = 1; address < 127; ++address) {
+                Wire.beginTransmission(address);
+                if (Wire.endTransmission() == 0) {
+                Serial.print("Device found at 0x");
+                Serial.println(address, HEX);
+                }
+            }
+        }
+
+        void loop() {}
+
+
+    */
+    // ToF Sensor Init
+    if (!vl53.begin()) {
+        Serial.println("Failed to find VL53L1X sensor!");
+        while (1) delay(10);
+    }
+    vl53.startRanging();
+    Serial.println("VL53L1X Sensor initialized.");
+}
+
+void loop() {
+    if (vl53.dataReady()) {
+        uint16_t distance = vl53.distance();  // mm
+
+        Serial.printf("Distance: %d mm\n", distance);
+ 
+        setColorByDistance(distance);
+
+        vl53.clearInterrupt();
+    }
+
+    delay(1);  // Log
+}
+
+void setColorByDistance(uint16_t distance) {
+    const uint16_t maxDistance = 2000;  // 2m
+    if (distance > maxDistance) distance = maxDistance;
+
+    // grad
+    uint8_t green = map(distance, 0, maxDistance, 0, 255);
+    uint8_t red   = 255 - green;
+
+    pixel.setPixelColor(0, pixel.Color(red, green, 0));
+    pixel.show();
+}

@@ -1,0 +1,139 @@
+#include <Wire.h>
+#include <Adafruit_VL53L1X.h>
+#include <Adafruit_NeoPixel.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+extern "C" {
+#include "esp_wpa2.h" // WPA2 Enterprise support for ESP32
+}
+
+// WiFi credentials
+const char* ssid     = "eth-5";
+const char* username = "dcarocci@student-net.ethz.ch";
+String password;
+
+// LED and sensor setup
+#define LED_PIN    8
+#define LED_COUNT  1
+Adafruit_NeoPixel pixel(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
+Adafruit_VL53L1X vl53 = Adafruit_VL53L1X();
+
+// Function declarations
+void setColor(uint8_t r, uint8_t g, uint8_t b);
+void sendData(uint16_t distance);
+void connectToWiFi();
+
+bool wifiConnected = false;
+
+void setup() {
+    Serial.begin(115200);
+    while (!Serial) delay(10);
+
+    // LED init
+    pixel.begin();
+    pixel.setBrightness(10);
+    pixel.show();
+
+    // Ask for ETHZ password
+    Serial.println("Enter ETHZ password:");
+    while (Serial.available() == 0) delay(100);
+    password = Serial.readStringUntil('\n');
+    password.trim();
+
+    connectToWiFi();
+
+    // Wait until WiFi is connected before starting the sensor
+    while (WiFi.status() != WL_CONNECTED) {
+        Serial.println("[WiFi] Connecting...");
+        setColor(255, 0, 255); // Magenta
+        delay(500);
+    }
+
+    Serial.println("[WiFi] Connected.");
+    setColor(0, 255, 0); // Green
+
+    // I2C for VL53L1X (GPIO7 = SDA, GPIO6 = SCL)
+    Wire.begin(7, 6);
+    if (!vl53.begin()) {
+        Serial.println("Failed to find VL53L1X sensor!");
+        setColor(255, 0, 0); // Red
+        while (1) delay(10);
+    }
+
+    vl53.startRanging();
+    Serial.println("VL53L1X Sensor initialized.");
+}
+
+void loop() {
+    // WiFi status handling
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("[WiFi] Disconnected. Trying to reconnect...");
+        setColor(255, 201, 0); // Orange
+        connectToWiFi();
+        delay(1000);
+        return;
+    }
+
+    // Measure distance
+    if (vl53.dataReady()) {
+        uint16_t distance = vl53.distance();
+        Serial.printf("Distance: %d mm\n", distance);
+        setColorByDistance(distance);
+
+        if (distance <= 30) {
+            sendData(distance);
+        }
+
+        vl53.clearInterrupt();
+    }
+
+    delay(500);
+}
+
+void connectToWiFi() {
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_STA);
+
+    esp_wifi_sta_wpa2_ent_set_identity((uint8_t*)username, strlen(username));
+    esp_wifi_sta_wpa2_ent_set_username((uint8_t*)username, strlen(username));
+    esp_wifi_sta_wpa2_ent_set_password((uint8_t*)password.c_str(), password.length());
+    // esp_wifi_sta_wpa2_ent_disable_ca_cert(); // This function does not exist and should be removed
+    esp_wifi_sta_wpa2_ent_enable();
+
+    WiFi.begin(ssid);
+    Serial.printf("[WiFi] Connecting to %s...\n", ssid);
+}
+
+void setColor(uint8_t r, uint8_t g, uint8_t b) {
+    pixel.setPixelColor(0, pixel.Color(r, g, b));
+    pixel.show();
+}
+
+void setColorByDistance(uint16_t distance) {
+    const uint16_t maxDistance = 2000;
+    if (distance > maxDistance) distance = maxDistance;
+    uint8_t green = map(distance, 0, maxDistance, 0, 255);
+    uint8_t red = 255 - green;
+    setColor(red, green, 0);
+}
+
+void sendData(uint16_t distance) {
+    HTTPClient http;
+    String url = "https://n.ethz.ch/~dcarocci/ESP/receive.php";
+    http.begin(url);
+
+    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+
+    String postData = "data={\"distance\":" + String(distance) + "}";
+    int httpResponseCode = http.POST(postData);
+
+    if (httpResponseCode > 0) {
+        Serial.printf("HTTP Response Code: %d\n", httpResponseCode);
+        String payload = http.getString();
+        Serial.println("Server Response: " + payload);
+    } else {
+        Serial.printf("HTTP Request Failed. Error: %s\n", http.errorToString(httpResponseCode).c_str());
+    }
+
+    http.end();
+}

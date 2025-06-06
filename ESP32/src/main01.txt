@@ -1,0 +1,73 @@
+#include <Adafruit_NeoPixel.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+
+#define LED_PIN    8     // GPIO8 controls the RGB LED
+#define LED_COUNT  1     // Only one RGB LED onboard
+
+const char* ssid = "Sunrise_679EF7";
+const char* password = "f68a3c72dd4f";
+
+Adafruit_NeoPixel pixel(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
+void setColor(uint8_t r, uint8_t g, uint8_t b);
+void sendData();
+
+void setup() {
+    Serial.begin(115200);
+    pixel.begin();      // Initialize the LED strip
+    pixel.show();       // Turn off all LEDs initially
+    WiFi.begin(ssid, password);
+    pixel.setBrightness(50); 
+}
+
+void loop() {
+    wl_status_t wifiStatus = WiFi.status();
+
+    switch (wifiStatus) {
+        case WL_CONNECTED:
+            Serial.println("[WiFi] Connected. Sending data...");
+            setColor(0, 255, 0);  // Green
+            sendData();
+            break;
+
+        case WL_DISCONNECTED:
+            Serial.println("[WiFi] Disconnected. Trying to reconnect...");
+            setColor(255, 201, 0);  // Orange
+            WiFi.begin(ssid, password);
+            break;
+
+        default:
+            Serial.println("[WiFi] Connecting...");
+            setColor(255, 0, 255);  // Magenta
+            break;
+    }
+
+    delay(5000);
+}
+
+
+void setColor(uint8_t r, uint8_t g, uint8_t b) {
+    pixel.setPixelColor(0, pixel.Color(r, g, b));
+    pixel.show();
+}
+void sendData() {
+    HTTPClient http;
+    String url = "https://n.ethz.ch/~dcarocci/ESP/receive.php";
+    http.begin(url);
+
+    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+
+    String postData = "data={\"message\":\"hello world\"}";
+
+    int httpResponseCode = http.POST(postData);
+
+    if (httpResponseCode > 0) {
+        Serial.printf("HTTP Response Code: %d\n", httpResponseCode);
+        String payload = http.getString();
+        Serial.println("Server Response: " + payload);
+    } else {
+        Serial.printf("HTTP Request Failed. Error: %s\n", http.errorToString(httpResponseCode).c_str());
+    }
+
+    http.end();
+}
